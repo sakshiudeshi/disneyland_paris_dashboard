@@ -189,3 +189,17 @@ class TestDisneyPriceAPI:
         assert payload["endDate"] == "2025-11-10"
         assert len(payload["products"]) == 1
         assert payload["products"][0]["productType"] == "1-day-1-park"
+
+    @patch("src.api.disney_api.requests.Session.post")
+    def test_fetch_prices_defaults_to_all_products(self, mock_post):
+        """Omitting product_types should request every product."""
+        mock_response = Mock()
+        mock_response.json.return_value = {"calendar": []}
+        mock_response.raise_for_status = Mock()
+        mock_post.return_value = mock_response
+
+        api = DisneyPriceAPI()
+        api.fetch_prices("2025-11-03", "2025-11-10")
+
+        payload = json.loads(mock_post.call_args[1]["data"])
+        assert len(payload["products"]) == len(DisneyPriceAPI.PRODUCT_TYPES)

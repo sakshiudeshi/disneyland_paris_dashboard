@@ -364,7 +364,7 @@ def display_monthly_recommendations(
     month_data = monthly[monthly["month"] == month_str]
 
     st.subheader(f"{price_label} Recommendations: {month_str}")
-    st.markdown("*Recommended price is the median for each tier in that month*")
+    st.markdown("*Recommended price is the 80th percentile for each tier in that month*")
 
     if month_data.empty:
         st.info(f"No data available for {month_str}")
@@ -422,42 +422,60 @@ def main():
     )
     price_column, price_label = PRICE_OPTIONS[price_choice]
 
-    default_start = datetime.now()
-    default_end = default_start + timedelta(days=365)
-
-    start_date = st.sidebar.date_input(
-        "Start Date",
-        value=default_start,
-        min_value=datetime.now() - timedelta(days=30)
-    )
-
-    end_date = st.sidebar.date_input(
-        "End Date",
-        value=default_end,
-        min_value=start_date
-    )
+    # Fixed date range: today to 6 months in future
+    start_date = datetime.now().date()
+    end_date = (datetime.now() + timedelta(days=180)).date()
 
     fetch_new = st.sidebar.button("Fetch New Data", type="primary")
 
     use_cached = st.sidebar.checkbox("Use Cached Data", value=True)
 
+    storage = get_storage()
+
+    # Check if data already fetched today
+    already_fetched_today = storage.has_snapshot_for_today(selected_product)
+
     # Fetch or load data
     if fetch_new or not use_cached:
-        with st.spinner("Fetching pricing data..."):
-            df, mapper, raw_data = fetch_and_process_data(
-                api,
-                selected_product,
-                start_date.strftime("%Y-%m-%d"),
-                end_date.strftime("%Y-%m-%d"),
-                save_snapshot=True
-            )
-            if df is not None:
+        if fetch_new and already_fetched_today:
+            st.sidebar.info("Data already fetched today. Using today's snapshot.")
+            # Load the latest snapshot instead
+            raw_data = storage.load_latest_snapshot(selected_product)
+            if raw_data:
+                mapper = TierMapper(selected_product)
+                df = mapper.map_calendar(raw_data)
                 st.session_state["current_data"] = (df, mapper, raw_data, selected_product)
-                st.success("Data fetched successfully")
             else:
-                st.error("Failed to fetch data")
+                st.error("Failed to load cached data")
+                return
+        elif fetch_new:
+            with st.spinner("Fetching pricing data..."):
+                df, mapper, raw_data = fetch_and_process_data(
+                    api,
+                    selected_product,
+                    start_date.strftime("%Y-%m-%d"),
+                    end_date.strftime("%Y-%m-%d"),
+                    save_snapshot=True
+                )
+                if df is not None:
+                    st.session_state["current_data"] = (df, mapper, raw_data, selected_product)
+                    st.success("Data fetched successfully")
+                else:
+                    st.error("Failed to fetch data")
+                    return
+        else:
+            # Use cached data when checkbox is checked
+            if "current_data" not in st.session_state:
+                st.info("No cached data. Click 'Fetch New Data' to load pricing information.")
+                return
+            df, mapper, raw_data, cached_product = st.session_state["current_data"]
+
+            # If product changed, need to fetch new data
+            if cached_product != selected_product:
+                st.warning("Product changed. Please click 'Fetch New Data' to load new data.")
                 return
     else:
+        # Use cached data when checkbox is not checked
         if "current_data" not in st.session_state:
             st.info("No cached data. Click 'Fetch New Data' to load pricing information.")
             return
@@ -470,11 +488,17 @@ def main():
 
     product_name = PRODUCT_TYPES[selected_product]
 
-    # Get available months
+    # Filter data to show only today to 6 months in future
     df["date"] = pd.to_datetime(df["date"])
+    today = pd.Timestamp.now().normalize()
+    six_months_future = today + pd.Timedelta(days=180)
+    df = df[(df["date"] >= today) & (df["date"] <= six_months_future)].copy()
+
     for price_col in ("price_adult", "price_child"):
         if price_col in df.columns:
             df[price_col] = pd.to_numeric(df[price_col], errors="coerce")
+
+    # Get available months
     available_months = sorted(df["date"].dt.to_period("M").astype(str).unique())
 
     # Month selector
@@ -502,6 +526,38 @@ def main():
         avg_price = df_month[price_column].mean()
         avg_display = f"{avg_price:.2f} EUR" if pd.notna(avg_price) else "No data"
         st.metric(f"Avg {price_choice} Price", avg_display)
+
+    # Display date range and quartile information
+    st.markdown("---")
+    info_col1, info_col2 = st.columns(2)
+
+    with info_col1:
+        st.markdown("### Date Range Analyzed")
+        min_date = df["date"].min().strftime("%Y-%m-%d") if not df.empty else "N/A"
+        max_date = df["date"].max().strftime("%Y-%m-%d") if not df.empty else "N/A"
+        total_days = len(df) if not df.empty else 0
+        st.markdown(f"**From:** {min_date}")
+        st.markdown(f"**To:** {max_date}")
+        st.markdown(f"**Total Days:** {total_days}")
+
+    with info_col2:
+        st.markdown(f"### {price_choice} Price Quartiles (Full Dataset)")
+        if not df.empty and df[price_column].notna().any():
+            prices = df[price_column].dropna()
+            q0 = prices.min()
+            q25 = prices.quantile(0.25)
+            q50 = prices.quantile(0.50)
+            q75 = prices.quantile(0.75)
+            q100 = prices.max()
+            st.markdown(f"**Min (0%):** {q0:.2f} EUR")
+            st.markdown(f"**Q1 (25%):** {q25:.2f} EUR")
+            st.markdown(f"**Median (50%):** {q50:.2f} EUR")
+            st.markdown(f"**Q3 (75%):** {q75:.2f} EUR")
+            st.markdown(f"**Max (100%):** {q100:.2f} EUR")
+        else:
+            st.markdown("No price data available")
+
+    st.markdown("---")
 
     # Price timeline for selected month
     if df_month[price_column].notna().any():

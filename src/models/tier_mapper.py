@@ -191,7 +191,7 @@ class TierMapper:
                     results.append({
                         "month": month,
                         "tier": tier.value,
-                        "recommended_price": round(tier_data[price_column].median(), 2),
+                        "recommended_price": round(tier_data[price_column].quantile(0.80), 2),
                         "min_price": tier_data[price_column].min(),
                         "max_price": tier_data[price_column].max(),
                         "num_days": len(tier_data),

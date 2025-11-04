@@ -1,3 +1,4 @@
+import logging
 import pytest
 import pandas as pd
 from src.models.tier_mapper import TierMapper, PriceTier
@@ -129,6 +130,17 @@ class TestTierMapper:
         assert isinstance(tier_70, PriceTier)
         assert isinstance(tier_110, PriceTier)
 
+    def test_map_price_to_tier_out_of_bounds(self, sample_pricing_data, caplog):
+        """Prices above known thresholds should log a warning and return None."""
+        mapper = TierMapper("1-day-1-park")
+        mapper.calculate_thresholds(sample_pricing_data)
+
+        with caplog.at_level(logging.WARNING):
+            result = mapper.map_price_to_tier(999.0)
+
+        assert result is None
+        assert "does not fall within any tier" in caplog.text
+
     def test_map_price_to_tier_no_thresholds(self):
         """Test mapping price without thresholds set."""
         mapper = TierMapper("1-day-1-park")
@@ -182,6 +194,26 @@ class TestTierMapper:
         assert len(monthly) > 0
         # Total days across all tiers should equal 5
         assert monthly["num_days"].sum() == 5
+
+    def test_format_date_ranges_handles_gaps(self):
+        """Contiguous and non-contiguous dates should be formatted correctly."""
+        mapper = TierMapper("1-day-1-park")
+        dates = [
+            "2025-11-01",
+            "2025-11-02",
+            "2025-11-05",
+            "2025-11-06",
+            "2025-11-08"
+        ]
+
+        formatted = mapper._format_date_ranges(dates)
+        assert formatted == "Nov 1-2, 5-6, 8"
+
+    def test_format_date_ranges_empty(self):
+        """Empty date lists should return an empty string."""
+        mapper = TierMapper("1-day-1-park")
+
+        assert mapper._format_date_ranges([]) == ""
 
     def test_detect_price_alerts_spike(self):
         """Test price alert detection for price spikes."""

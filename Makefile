@@ -22,6 +22,10 @@ run:
 test:
 	$(PYTEST) tests/ -v
 
+test-coverage:
+	COVERAGE_FILE=.coverage $(PYTHON) -m coverage run -m pytest tests
+	COVERAGE_FILE=.coverage $(PYTHON) -m coverage report -m
+
 fetch-prices:
 	$(PYTHON) -m src.api.disney_api
 

@@ -83,6 +83,25 @@ class PriceHistoryStore:
         logger.info(f"Saved mapped data to {filepath}")
         return str(filepath)
 
+    def has_snapshot_for_today(self, product_type: str) -> bool:
+        """
+        Check if a snapshot exists for today.
+
+        Args:
+            product_type: Product type identifier
+
+        Returns:
+            True if a snapshot exists for today, False otherwise
+        """
+        today_str = datetime.now().strftime('%Y%m%d')
+        pattern = f"{product_type}_{today_str}_*.json"
+        files = list(self.data_dir.glob(pattern))
+
+        if files:
+            logger.info(f"Found {len(files)} snapshot(s) for {product_type} from today")
+            return True
+        return False
+
     def load_latest_snapshot(self, product_type: str) -> Optional[Dict]:
         """
         Load the most recent snapshot for a product type.
