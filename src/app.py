@@ -1,3 +1,4 @@
+import os
 import streamlit as st
 import pandas as pd
 import plotly.express as px
@@ -29,6 +30,36 @@ st.set_page_config(
     }
 )
 
+
+def require_password() -> None:
+    """Prompt for password before rendering the rest of the app."""
+    # expected = st.secrets.get("APP_PASSWORD") if hasattr(st, "secrets") else None
+    # if not expected:
+    expected = "disney-gt"
+
+    if not expected:
+        st.error("Application password is not configured.")
+        st.stop()
+
+    authenticated = st.session_state.get("authenticated", False)
+    if authenticated:
+        return
+
+    with st.form("password_entry"):
+        password_input = st.text_input("Enter password", type="password")
+        submitted = st.form_submit_button("Submit")
+
+    if submitted and password_input == expected:
+        st.session_state["authenticated"] = True
+        st.rerun()
+    else:
+        if submitted:
+            st.error("Incorrect password. Please try again.")
+        st.stop()
+
+
+require_password()
+
 PRODUCT_TYPES = {
     "1-day-1-park": "1 Day 1 Park",
     "1-day-2-parks": "1 Day 2 Parks",
@@ -49,6 +80,27 @@ PRICE_OPTIONS = {
     "Adult": ("price_adult", "Adult Price (EUR)"),
     "Child": ("price_child", "Child Price (EUR)")
 }
+
+
+def format_date(date) -> str:
+    """Format date as '04 Nov 2025'."""
+    if pd.isna(date):
+        return "N/A"
+    if isinstance(date, str):
+        date = pd.to_datetime(date)
+    return date.strftime("%d %b %Y")
+
+
+def format_month(date_or_period) -> str:
+    """Format month as 'Nov 2025'."""
+    if isinstance(date_or_period, str):
+        # Parse YYYY-MM format
+        date = pd.to_datetime(date_or_period + "-01")
+    elif isinstance(date_or_period, pd.Period):
+        date = date_or_period.to_timestamp()
+    else:
+        date = pd.to_datetime(date_or_period)
+    return date.strftime("%b %Y")
 
 
 @st.cache_resource
@@ -121,13 +173,18 @@ def create_calendar_heatmap(df: pd.DataFrame, product_name: str) -> go.Figure:
 
 def create_tier_distribution(df: pd.DataFrame) -> go.Figure:
     """Create tier distribution chart."""
+    # Get tier counts and ensure all tiers are included (even with 0 count)
+    all_tiers = ["Low Peak", "Shoulder (Normal)", "Peak", "Super Peak", "Mega Peak"]
     tier_counts = df["globaltix_tier"].value_counts()
+
+    # Create a list with all tiers in order, filling in 0 for missing tiers
+    tier_values = [tier_counts.get(tier, 0) for tier in all_tiers]
 
     fig = go.Figure(data=[
         go.Bar(
-            x=tier_counts.index,
-            y=tier_counts.values,
-            marker_color=[TIER_COLORS.get(t, "#95a5a6") for t in tier_counts.index]
+            x=all_tiers,
+            y=tier_values,
+            marker_color=[TIER_COLORS.get(t, "#95a5a6") for t in all_tiers]
         )
     ])
 
@@ -228,7 +285,7 @@ def create_monthly_heatmap(df: pd.DataFrame, month_str: str, price_column: str, 
                 data_dict[day] = {
                     "price": price_value,
                     "tier": row["globaltix_tier"],
-                    "date_str": row["date"].strftime("%Y-%m-%d")
+                    "date_str": format_date(row["date"])
                 }
 
     # Direct color mapping - no interpolation
@@ -270,13 +327,13 @@ def create_monthly_heatmap(df: pd.DataFrame, month_str: str, price_column: str, 
             # Past date with no data - mark as NA
             tier = None
             color = get_tier_color(None, date)
-            hover = f"Date: {date.strftime('%Y-%m-%d')}<br>No data available"
+            hover = f"Date: {format_date(date)}<br>No data available"
             text = "NA"
         else:
             # Future date with no data yet - mark as empty
             tier = None
             color = get_tier_color(None, date)
-            hover = f"Date: {date.strftime('%Y-%m-%d')}<br>No data yet"
+            hover = f"Date: {format_date(date)}<br>No data yet"
             text = str(day)
 
         calendar_data.append({
@@ -337,7 +394,7 @@ def create_monthly_heatmap(df: pd.DataFrame, month_str: str, price_column: str, 
 
     fig.update_layout(
         title=dict(
-            text=f"📅 {month_str}",
+            text=f"{format_month(month_str)}",
             font=dict(color='white')
         ),
         height=fig_height,
@@ -363,11 +420,14 @@ def display_monthly_recommendations(
     # Filter to selected month
     month_data = monthly[monthly["month"] == month_str]
 
-    st.subheader(f"{price_label} Recommendations: {month_str}")
+    # Format month for display
+    month_display = format_month(month_str)
+
+    st.subheader(f"{price_label} Recommendations: {month_display}")
     st.markdown("*Recommended price is the 80th percentile for each tier in that month*")
 
     if month_data.empty:
-        st.info(f"No data available for {month_str}")
+        st.info(f"No data available for {month_display}")
         return
 
     # Create a formatted table
@@ -499,20 +559,25 @@ def main():
             df[price_col] = pd.to_numeric(df[price_col], errors="coerce")
 
     # Get available months
-    available_months = sorted(df["date"].dt.to_period("M").astype(str).unique())
+    available_months_raw = sorted(df["date"].dt.to_period("M").astype(str).unique())
+    available_months_formatted = [format_month(m) for m in available_months_raw]
 
     # Month selector
-    selected_month = st.sidebar.selectbox(
+    selected_month_display = st.sidebar.selectbox(
         "Select Month",
-        options=available_months,
+        options=available_months_formatted,
         index=0
     )
+
+    # Convert back to YYYY-MM format for filtering
+    selected_month_idx = available_months_formatted.index(selected_month_display)
+    selected_month_raw = available_months_raw[selected_month_idx]
 
     st.sidebar.markdown("---")
     st.sidebar.caption("Disneyland Paris Pricing Dashboard v2.0")
 
     # Filter data for selected month
-    df_month = df[df["date"].dt.to_period("M").astype(str) == selected_month].copy()
+    df_month = df[df["date"].dt.to_period("M").astype(str) == selected_month_raw].copy()
     if price_column not in df_month.columns:
         df_month[price_column] = pd.NA
 
@@ -521,41 +586,135 @@ def main():
     with col1:
         st.metric("Product", product_name)
     with col2:
-        st.metric("Month", selected_month)
+        st.metric("Month", selected_month_display)
     with col3:
         avg_price = df_month[price_column].mean()
         avg_display = f"{avg_price:.2f} EUR" if pd.notna(avg_price) else "No data"
         st.metric(f"Avg {price_choice} Price", avg_display)
 
-    # Display date range and quartile information
+    # Display date range information
     st.markdown("---")
-    info_col1, info_col2 = st.columns(2)
+    st.markdown("### Date Range Analyzed")
+    info_col1, info_col2, info_col3 = st.columns(3)
 
     with info_col1:
-        st.markdown("### Date Range Analyzed")
-        min_date = df["date"].min().strftime("%Y-%m-%d") if not df.empty else "N/A"
-        max_date = df["date"].max().strftime("%Y-%m-%d") if not df.empty else "N/A"
-        total_days = len(df) if not df.empty else 0
+        min_date = format_date(df["date"].min()) if not df.empty else "N/A"
         st.markdown(f"**From:** {min_date}")
+    with info_col2:
+        max_date = format_date(df["date"].max()) if not df.empty else "N/A"
         st.markdown(f"**To:** {max_date}")
+    with info_col3:
+        total_days = len(df) if not df.empty else 0
         st.markdown(f"**Total Days:** {total_days}")
 
-    with info_col2:
-        st.markdown(f"### {price_choice} Price Quartiles (Full Dataset)")
-        if not df.empty and df[price_column].notna().any():
-            prices = df[price_column].dropna()
-            q0 = prices.min()
-            q25 = prices.quantile(0.25)
-            q50 = prices.quantile(0.50)
-            q75 = prices.quantile(0.75)
-            q100 = prices.max()
-            st.markdown(f"**Min (0%):** {q0:.2f} EUR")
-            st.markdown(f"**Q1 (25%):** {q25:.2f} EUR")
-            st.markdown(f"**Median (50%):** {q50:.2f} EUR")
-            st.markdown(f"**Q3 (75%):** {q75:.2f} EUR")
-            st.markdown(f"**Max (100%):** {q100:.2f} EUR")
-        else:
-            st.markdown("No price data available")
+    # Price Quartiles - Full Width
+    st.markdown("---")
+    st.markdown(f"### {price_choice} Price Quartiles (Full Dataset)")
+
+    if not df.empty and df[price_column].notna().any():
+        prices = df[price_column].dropna()
+        q0 = prices.min()
+        q25 = prices.quantile(0.25)
+        q50 = prices.quantile(0.50)
+        q75 = prices.quantile(0.75)
+        q100 = prices.max()
+
+        # Get all unique price values and sort them
+        all_prices = sorted(prices.unique())
+        quartile_values = [q0, q25, q50, q75, q100]
+        quartile_labels = ['Min\n(0%)', 'Q1\n(25%)', 'Median\n(50%)', 'Q3\n(75%)', 'Max\n(100%)']
+
+        # Create single horizontal line visualization for all data
+        quartile_fig = go.Figure()
+
+        # Add all data points as small markers on the line
+        quartile_fig.add_trace(go.Scatter(
+            x=all_prices,
+            y=[0] * len(all_prices),
+            mode='markers',
+            marker=dict(size=4, color='#95a5a6', symbol='circle'),
+            showlegend=False,
+            hovertemplate='<b>%{x:.2f} EUR</b><extra></extra>',
+            hoverlabel=dict(
+                bgcolor='#95a5a6',
+                font_size=14,
+                font_family='Arial',
+                font_color='white'
+            )
+        ))
+
+        # Add connecting line through all data points
+        quartile_fig.add_trace(go.Scatter(
+            x=[all_prices[0], all_prices[-1]],
+            y=[0, 0],
+            mode='lines',
+            line=dict(color='#3498db', width=2),
+            showlegend=False,
+            hoverinfo='skip'
+        ))
+
+        # Highlight quartile points with larger markers
+        quartile_fig.add_trace(go.Scatter(
+            x=quartile_values,
+            y=[0] * len(quartile_values),
+            mode='markers+text',
+            marker=dict(size=14, color='#3498db', symbol='diamond', line=dict(width=2, color='white')),
+            text=[f"{v:.2f}" for v in quartile_values],
+            textposition="bottom center",
+            textfont=dict(color='white', size=12, family='Arial'),
+            showlegend=False,
+            hovertemplate='<b>%{text} EUR</b><extra></extra>',
+            hoverlabel=dict(
+                bgcolor='#3498db',
+                font_size=16,
+                font_family='Arial',
+                font_color='white'
+            )
+        ))
+
+        # Add labels above the quartile markers
+        for val, label in zip(quartile_values, quartile_labels):
+            quartile_fig.add_annotation(
+                x=val,
+                y=0.15,
+                text=label,
+                showarrow=False,
+                font=dict(size=11, color='white'),
+                xanchor='center'
+            )
+
+        quartile_fig.update_layout(
+            height=200,
+            margin=dict(l=20, r=20, t=20, b=60),
+            plot_bgcolor='#0e1117',
+            paper_bgcolor='#0e1117',
+            font=dict(color='white'),
+            xaxis=dict(
+                title=dict(text=price_label, font=dict(size=13)),
+                gridcolor='#262730',
+                showgrid=False,
+                zeroline=False,
+                showticklabels=False,
+                tickmode='array',
+                tickvals=all_prices,
+                ticks='outside',
+                ticklen=4,
+                tickwidth=1,
+                tickcolor='#555555'
+            ),
+            yaxis=dict(
+                range=[-0.3, 0.3],
+                showticklabels=False,
+                showgrid=False,
+                zeroline=False
+            ),
+            showlegend=False,
+            hovermode='closest'
+        )
+
+        st.plotly_chart(quartile_fig, use_container_width=True)
+    else:
+        st.markdown("No price data available")
 
     st.markdown("---")
 
@@ -564,14 +723,14 @@ def main():
         st.plotly_chart(
             create_price_timeline(
                 df_month,
-                f"{product_name} - {selected_month}",
+                f"{product_name} - {selected_month_display}",
                 price_column,
                 price_label
             ),
             use_container_width=True
         )
     else:
-        st.info(f"No {price_choice.lower()} price data available for {selected_month}.")
+        st.info(f"No {price_choice.lower()} price data available for {selected_month_display}.")
 
     # Tier distribution for selected month
     col1, col2 = st.columns(2)
@@ -587,7 +746,7 @@ def main():
     display_monthly_recommendations(
         mapper,
         df,
-        selected_month,
+        selected_month_raw,
         price_column,
         price_label
     )
