@@ -47,6 +47,21 @@ make test
 make fetch-prices
 ```
 
+## Deployment
+
+### Streamlit Community Cloud (Recommended)
+
+1. Push this repository (including `requirements.txt` and `streamlit_app.py`) to GitHub.
+2. Sign in to [Streamlit Community Cloud](https://streamlit.io/cloud) and choose **New app**.
+3. Select the repository, branch, and set the app entry point to `streamlit_app.py`.
+4. Keep the default command (`pip install -r requirements.txt`) unless you maintain a different dependency file.
+5. Click **Deploy** to build and launch the app; Streamlit will display a public URL when ready.
+
+#### Notes
+- The `data/` folder is short-lived in Streamlit Cloud; containers reset it on restart, so download exports you need to keep.
+- Add a `runtime.txt` (e.g. `python-3.11`) if you must target a specific Python version.
+- Configure any future secrets via Streamlit Cloud's **Secrets** manager.
+
 ## Project Structure
 
 ```
